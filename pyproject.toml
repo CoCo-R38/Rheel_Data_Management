@@ -1,0 +1,23 @@
+[project]
+name = "rheel_data_management"
+version = "1.0.dev01"
+authors = [
+  { name="CoCo_R", email="coco_snow@myyahoo.com" },
+]
+description = "A small example package"
+readme = "README.md"
+requires-python = ">=3.13"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "GPL-3.0-only"
+license-files = ["LICENSE*"]
+
+[project.urls]
+Homepage = "https://github.com/CoCo-R38/Rheel_Data_Management"
+Issues = "https://github.com/CoCo-R38/Rheel_Data_Management/issues"
+
+[build-system]
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
