@@ -1,10 +1,10 @@
 [project]
-name = "rheel_data_management"
-version = "1.0.dev01"
+name = "Rheel-Data-Management"
+version = "1.1"
 authors = [
   { name="CoCo_R", email="coco_snow@myyahoo.com" },
 ]
-description = "A small example package"
+description = "Data management for python made easy"
 readme = "README.md"
 requires-python = ">=3.13"
 classifiers = [
@@ -21,3 +21,6 @@ Issues = "https://github.com/CoCo-R38/Rheel_Data_Management/issues"
 [build-system]
 requires = ["hatchling >= 1.26"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rheelDM"]
