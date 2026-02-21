@@ -1,6 +1,7 @@
 # Rheel Data Management
 
-This python project renvents data management. This mildly-fast module protects and saves your data in .rdm files.
+This python project reinvents data management. This mildly-fast module protects and saves your data in .rdm files.
+
 Why use this instead of json or toml?
 It's (strictly) typed, human readable, section-based and you can edit it on the go (if you load and save it on every use).
 It also has corruption-protection with atomic file rewrites.
