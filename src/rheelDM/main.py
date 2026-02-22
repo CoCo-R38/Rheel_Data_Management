@@ -3,8 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import datetime, date, time
 from typing import Any, get_origin, get_args, Union
-import ast
-import types
+import ast, types, copy
 
 
 # =========================================================
@@ -257,25 +256,13 @@ class Obj:
             self._sections[name] = Section(name)
         return self._sections[name]
 
-    def save(self, filename: str | Path, default: dict | Obj | None = None):
+    def save(self, filename: str | Path):
         """
         Save object to file.
-
-        If file does not exist and default is provided,
-        the default will be written instead.
         """
         path = Path(filename)
         if path.suffix != ".rdm":
             path = path.with_suffix(".rdm")
-
-        if not path.exists() and default:
-            if isinstance(default, Obj):
-                default.save(path)
-                return
-            if isinstance(default, dict):
-                obj = Obj.from_dict(default)
-                obj.save(path)
-                return
 
         lines = []
         for section in self._sections.values():
@@ -290,7 +277,7 @@ class Obj:
         Load an RDM file.
 
         If file does not exist:
-            - If default is provided, return default
+            - If default is provided, return a copy of default
             - Else return empty Obj
         """
         path = Path(filename)
@@ -299,7 +286,7 @@ class Obj:
 
         if not path.exists():
             if isinstance(default, Obj):
-                return default
+                return copy.deepcopy(default)
             if isinstance(default, dict):
                 return cls.from_dict(default)
             return cls()
