@@ -189,6 +189,22 @@ class Section:
         else:
             raise TypeError(f"Cannot add to type {typ}")
 
+    def multiply(self, key: str, factor: int | float):
+        """
+        Multiply a numeric value by a factor.
+
+        Works for int and float types. Fractional values act as division.
+
+        Raises:
+            TypeError if the current value is not int or float.
+        """
+        if key not in self._items:
+            raise KeyError(f"{key} does not exist in section {self.name}")
+        typ, value = self._items[key]
+        if typ not in (int, float):
+            raise TypeError(f"Cannot multiply non-numeric type {typ}")
+        self._items[key] = (typ, value * factor)
+
     def extend(self, key: str, value: Any):
         """
         Dynamically extend or combine values based on type:
@@ -433,4 +449,5 @@ class Obj:
             section = obj.section(section_name)
             for key, (typ, value) in items.items():
                 section.set(key, typ, value)
+
         return obj
