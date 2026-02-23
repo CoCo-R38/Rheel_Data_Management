@@ -112,28 +112,128 @@ class Section:
     """
     Represents a single section inside an Obj.
 
-    Usage:
+    Provides type-safe get/set methods, arithmetic operations for numbers
+    and extension operations for strings, lists, sets, dicts, and Paths.
+
+    Usage examples:
+
         sec = obj.section("user123")
-        sec.set("name", str, "CoCo")
-        value = sec.get("name")
+        sec.set("score", int, 10)           # 10
+        sec.add("score", 5)                 # 15
+        sec.add("score", -3)                # 12
+        sec.set("name", str, "CoCo")        # "CoCo"
+        sec.extend("name", "Bot")           # "CoCoBot"
+        sec.set("items", list, [1,2])       # [1,2]
+        sec.extend("items", 3)              # [1,2,3]
+        sec.extend("items", [4,5])          # [1,2,3,4,5]
+        sec.set("tags", set, {1,2})         # {1,2}
+        sec.extend("tags", 3)               # {1,2,3}
+        sec.extend("tags", {4,5})           # {1,2,3,4,5}
+        sec.set("config", dict, {"a":1})    # {"a": 1}
+        sec.extend("config", {"b":2})       # {"a": 1, "b": 2}
+        sec.set("joined", datetime.datetime.now())
+        sec.add("joined", 3600)             # adds 3600 seconds
+        sec.set("path", Path("/tmp"))       # Path("/tmp")
+        sec.extend("path", "logs")          # Path("/tmp/logs")
+
+        sec.delete("score")                 # remove key
     """
 
     def __init__(self, name: str):
         self.name = name
         self._items: dict[str, tuple[type, Any]] = {}
 
-    def set(self, key: str, typ: type, value: Any):
-        """Set a key with strict type validation."""
+    def set(self, key: str, typ: type, value: Any, overwrite=True):
+        """
+        Set a key with strict type validation. Mutable values (`list`, `dict`, `set`) will be deep-copied to prevent external modifications after setting.
+
+        `overwrite=False` will prevent overwriting existing keys, raising an error instead.
+        """
+        if not overwrite and key in self._items:
+            raise KeyError(f"{key} already exists in section {self.name}")
+        if isinstance(value, (list, dict, set)):
+            value = copy.deepcopy(value)
+
         self._validate(value, typ)
         self._items[key] = (typ, value)
 
-    def get(self, key: str, default: Any = None):
-        """
-        Retrieve a value by key.
+    def get(self, key: str, default: Any = KeyError) -> Any:
+        """Retrieve a value by key. Returns a copy of default if key does not exist. Raises KeyError if key is missing and no default is provided."""
+        val = self._items.get(key, (None, copy.deepcopy(default)))[1]
+        if val is KeyError:
+            raise KeyError(f"\"{key}\" does not exist in section {self.name}")
+        else:
+            return val
 
-        If key does not exist, returns `default`.
+    def delete(self, key: str):
+        """Remove a key from the section."""
+        if key in self._items:
+            del self._items[key]
+
+    def add(self, key: str, value: Any):
         """
-        return self._items.get(key, (None, default))[1]
+        Add or subtract a value for numbers or datetime.
+
+        Works for int, float, or datetime (adds seconds as timedelta).
+        Negative numbers perform subtraction.
+        """
+        if key not in self._items:
+            raise KeyError(f"{key} does not exist in section {self.name}")
+        typ, current = self._items[key]
+
+        if typ in (int, float):
+            self._items[key] = (typ, current + value)
+        elif typ is datetime:
+            import datetime as dt
+            self._items[key] = (typ, current + dt.timedelta(seconds=value))
+        else:
+            raise TypeError(f"Cannot add to type {typ}")
+
+    def extend(self, key: str, value: Any):
+        """
+        Dynamically extend or combine values based on type:
+
+            str       -> concatenate
+            list      -> append item or concatenate list
+            set       -> add item or union with set
+            dict      -> merge dictionaries
+            Path      -> join with string or Path
+        """
+        if key not in self._items:
+            raise KeyError(f"{key} does not exist in section {self.name}")
+        typ, current = self._items[key]
+
+        if typ is str:
+            if not isinstance(value, str):
+                raise TypeError("Can only extend str with str")
+            self._items[key] = (typ, current + value)
+
+        elif typ is list:
+            if isinstance(value, list):
+                self._items[key] = (typ, current + value)
+            else:
+                self._items[key] = (typ, current + [value])
+
+        elif typ is set:
+            if isinstance(value, set):
+                self._items[key] = (typ, current.union(value))
+            else:
+                self._items[key] = (typ, current | {value})
+
+        elif typ is dict:
+            if not isinstance(value, dict):
+                raise TypeError("Can only extend dict with dict")
+            self._items[key] = (typ, {**current, **value})
+
+        elif typ is Path:
+            from pathlib import Path
+            if isinstance(value, (str, Path)):
+                self._items[key] = (typ, current / value)
+            else:
+                raise TypeError("Can only extend Path with str or Path")
+
+        else:
+            raise TypeError(f"Cannot extend type {typ}")
 
     # -----------------------
     # Type Validation
