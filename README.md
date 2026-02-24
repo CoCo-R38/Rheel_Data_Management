@@ -159,6 +159,7 @@ user.delete("score") # key, value and type of "score" will be deleted entirely f
 -   `int`
 -   `float`
 -   `bool`
+-   `None`
 -   `list[T]`
 -   `set[T]`
 -   `tuple[T]`
@@ -231,6 +232,7 @@ JSON cannot store:
 - Union types
 - Nested generics
 - `int` as `dict`-keys
+- `None` (stores it as `null`)
 
 TOML cannot store:
 - `Path`
