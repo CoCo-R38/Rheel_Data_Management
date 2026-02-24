@@ -1,6 +1,6 @@
 [project]
 name = "Rheel-Data-Management"
-version = "1.4"
+version = "1.5"
 authors = [
   { name="CoCo_R", email="coco_snow@myyahoo.com" },
 ]
@@ -22,4 +22,5 @@ requires = ["hatchling >= 1.26"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
+
 packages = ["src/rheelDM"]
