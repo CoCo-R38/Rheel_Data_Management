@@ -1,6 +1,6 @@
 # Rheel Data Management
 
-![Python](https://img.shields.io/badge/python-3.13+-blue.svg)
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![License](https://img.shields.io/badge/license-GPL_3.0-green.svg)
 
 Strictly-typed, human-readable data management for Python.
@@ -92,7 +92,7 @@ default_data.section("user123").set("score", int, 0)
 default_items = rheelDM.Obj()
 default_items.section("user123").set("items", list, [1])
 
-loaded = rheelDM.Obj.load("botdata.rdm", default_data) # uses a copy of default if file not found
+loaded = rheelDM.Obj.load("botdata.rdm", default_data) # uses a copy of default if file not found (this can also be a boolean for catching missing files)
 user = loaded.section("user123")
 
 print(user.get("name"))  # "Steve"
