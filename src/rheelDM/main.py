@@ -88,6 +88,7 @@ SAFE_TYPES = {
     "int": int,
     "float": float,
     "bool": bool,
+    "NoneType": type(None),
     "list": list,
     "set": set,
     "tuple": tuple,
@@ -96,7 +97,6 @@ SAFE_TYPES = {
     "date": date,
     "time": time,
     "Path": Path,
-    "NoneType": type(None),
 }
 
 
@@ -182,9 +182,11 @@ class Section:
             raise KeyError(f"{key} does not exist in section {self.name}")
         typ, current = self._items[key]
 
-        if typ in (int, float):
+        origin_type = get_origin(typ) or typ
+
+        if origin_type in (int, float):
             self._items[key] = (typ, current + value)
-        elif typ is datetime:
+        elif origin_type is datetime:
             import datetime as dt
             self._items[key] = (typ, current + dt.timedelta(seconds=value))
         else:
@@ -202,7 +204,10 @@ class Section:
         if key not in self._items:
             raise KeyError(f"{key} does not exist in section {self.name}")
         typ, value = self._items[key]
-        if typ not in (int, float):
+
+        origin_type = get_origin(typ) or typ
+
+        if origin_type not in (int, float):
             raise TypeError(f"Cannot multiply non-numeric type {typ}")
         self._items[key] = (typ, value * factor)
 
@@ -220,30 +225,31 @@ class Section:
             raise KeyError(f"{key} does not exist in section {self.name}")
         typ, current = self._items[key]
 
-        if typ is str:
+        origin_type = get_origin(typ) or typ
+
+        if origin_type is str:
             if not isinstance(value, str):
                 raise TypeError("Can only extend str with str")
             self._items[key] = (typ, current + value)
 
-        elif typ is list:
+        elif origin_type is list:
             if isinstance(value, list):
                 self._items[key] = (typ, current + value)
             else:
                 self._items[key] = (typ, current + [value])
 
-        elif typ is set:
+        elif origin_type is set:
             if isinstance(value, set):
                 self._items[key] = (typ, current.union(value))
             else:
                 self._items[key] = (typ, current | {value})
 
-        elif typ is dict:
+        elif origin_type is dict:
             if not isinstance(value, dict):
                 raise TypeError("Can only extend dict with dict")
             self._items[key] = (typ, {**current, **value})
 
-        elif typ is Path:
-            from pathlib import Path
+        elif origin_type is Path:
             if isinstance(value, (str, Path)):
                 self._items[key] = (typ, current / value)
             else:
@@ -389,7 +395,7 @@ class Obj:
         path.write_text("\n".join(lines).rstrip())
 
     @classmethod
-    def load(cls, filename: str | Path, default: dict | Obj | None = None) -> Obj:
+    def load(cls, filename: str | Path, default: dict | Obj | bool | None = None) -> Obj | bool:
         """
         Load an RDM file.
 
@@ -402,6 +408,8 @@ class Obj:
             path = path.with_suffix(".rdm")
 
         if not path.exists():
+            if isinstance(default, bool):
+                return copy.deepcopy(default)
             if isinstance(default, Obj):
                 return copy.deepcopy(default)
             if isinstance(default, dict):
