@@ -96,6 +96,7 @@ SAFE_TYPES = {
     "date": date,
     "time": time,
     "Path": Path,
+    "NoneType": type(None),
 }
 
 
@@ -449,5 +450,4 @@ class Obj:
             section = obj.section(section_name)
             for key, (typ, value) in items.items():
                 section.set(key, typ, value)
-
         return obj
