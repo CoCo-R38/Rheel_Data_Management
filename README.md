@@ -145,6 +145,11 @@ config_dir = Path("/settings")
 user.set("config_file", Path, config_dir)   # Path(/settings)
 user.extend("config_file", "steve3828.rdm") # Path(/settings/steve3828.rdm)
 ```
+#### Convert non-RDM Files
+```python
+rheelDM.Obj.convert_file("/settings/data.json", overwrite=True)
+rheelDM.Obj.load("/settings/data.rdm")
+```
 
 ### Delete Data
 ```python
