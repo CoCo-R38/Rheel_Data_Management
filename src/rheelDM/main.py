@@ -447,127 +447,127 @@ class Obj:
 
         return obj
 
-@classmethod
-def from_dict(cls, data: dict, default_section = "not sectioned") -> Obj:
-    """
-    Create Obj from a dictionary.
+    @classmethod
+    def from_dict(cls, data: dict, default_section = "not sectioned") -> Obj:
+        """
+        Create Obj from a dictionary.
 
-    Rules:
-        - Top-level dict values become sections
-        - Top-level non-dict values go into `default_section`
-        - Values may be:
-            (type, value) tuples
-            or plain values (type inferred)
-    """
-    obj = cls()
+        Rules:
+            - Top-level dict values become sections
+            - Top-level non-dict values go into `default_section`
+            - Values may be:
+                (type, value) tuples
+                or plain values (type inferred)
+        """
+        obj = cls()
 
-    if not isinstance(data, dict):
-        raise TypeError("Input data must be a dictionary")
+        if not isinstance(data, dict):
+            raise TypeError("Input data must be a dictionary")
 
-    for key, value in data.items():
+        for key, value in data.items():
 
-        # -------- Case 1: Proper section --------
-        if isinstance(value, dict):
-            section = obj.section(key)
+            # -------- Case 1: Proper section --------
+            if isinstance(value, dict):
+                section = obj.section(key)
 
-            for subkey, entry in value.items():
+                for subkey, entry in value.items():
 
-                # (type, value)
-                if (
-                    isinstance(entry, tuple)
-                    and len(entry) == 2
-                    and isinstance(entry[0], type)
-                ):
-                    typ, val = entry
-                else:
-                    typ = type(entry)
-                    val = entry
+                    # (type, value)
+                    if (
+                        isinstance(entry, tuple)
+                        and len(entry) == 2
+                        and isinstance(entry[0], type)
+                    ):
+                        typ, val = entry
+                    else:
+                        typ = type(entry)
+                        val = entry
 
-                section.set(subkey, typ, val)
+                    section.set(subkey, typ, val)
 
-        # -------- Case 2: Top-level value --------
-        else:
-            section = obj.section(default_section)
-
-            if (
-                isinstance(value, tuple)
-                and len(value) == 2
-                and isinstance(value[0], type)
-            ):
-                typ, val = value
+            # -------- Case 2: Top-level value --------
             else:
-                typ = type(value)
-                val = value
+                section = obj.section(default_section)
 
-            section.set(key, typ, val)
+                if (
+                    isinstance(value, tuple)
+                    and len(value) == 2
+                    and isinstance(value[0], type)
+                ):
+                    typ, val = value
+                else:
+                    typ = type(value)
+                    val = value
 
-    return obj
+                section.set(key, typ, val)
 
-@classmethod
-def convert_file(cls, filename: str | Path, default_section = "not sectioned", overwrite = False) -> Obj:
-    """
-    Convert JSON, TOML, YAML, or INI into .rdm format.
+        return obj
 
-    If overwrite=True, deletes original file after conversion.
-    """
+    @classmethod
+    def convert_file(cls, filename: str | Path, default_section = "not sectioned", overwrite = False) -> Obj:
+        """
+        Convert JSON, TOML, YAML, or INI into .rdm format.
 
-    path = Path(filename)
+        If overwrite=True, deletes original file after conversion.
+        """
 
-    if not path.exists():
-        raise FileNotFoundError(path)
+        path = Path(filename)
 
-    suffix = path.suffix.lower()
+        if not path.exists():
+            raise FileNotFoundError(path)
 
-    # -------- Load Data --------
+        suffix = path.suffix.lower()
 
-    if suffix == ".json":
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        # -------- Load Data --------
 
-    elif suffix == ".toml":
-        if tomllib:
-            with open(path, "rb") as f:
-                data = tomllib.load(f)
-        elif toml:
+        if suffix == ".json":
             with open(path, "r", encoding="utf-8") as f:
-                data = toml.load(f)
+                data = json.load(f)
+
+        elif suffix == ".toml":
+            if tomllib:
+                with open(path, "rb") as f:
+                    data = tomllib.load(f)
+            elif toml:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = toml.load(f)
+            else:
+                raise RuntimeError("TOML requires Python 3.11+ or 'toml' package.")
+
+        elif suffix in (".yaml", ".yml"):
+            if not yaml:
+                raise RuntimeError("YAML support requires PyYAML.")
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+
+        elif suffix == ".ini":
+            parser = configparser.ConfigParser()
+            parser.read(path)
+
+            data = {}
+
+            # Sections
+            for section in parser.sections():
+                data[section] = dict(parser[section])
+
+            # Handle DEFAULT section
+            if parser.defaults():
+                data["default"] = dict(parser.defaults())
+
         else:
-            raise RuntimeError("TOML requires Python 3.11+ or 'toml' package.")
+            raise ValueError(f"Unsupported file type: {suffix}")
 
-    elif suffix in (".yaml", ".yml"):
-        if not yaml:
-            raise RuntimeError("YAML support requires PyYAML.")
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            raise TypeError("Top-level structure must be a dictionary")
 
-    elif suffix == ".ini":
-        parser = configparser.ConfigParser()
-        parser.read(path)
+        # -------- Convert --------
 
-        data = {}
+        obj = cls.from_dict(data, default_section)
 
-        # Sections
-        for section in parser.sections():
-            data[section] = dict(parser[section])
+        new_path = path.with_suffix(".rdm")
+        obj.save(new_path)
 
-        # Handle DEFAULT section
-        if parser.defaults():
-            data["default"] = dict(parser.defaults())
+        if overwrite:
+            path.unlink()
 
-    else:
-        raise ValueError(f"Unsupported file type: {suffix}")
-
-    if not isinstance(data, dict):
-        raise TypeError("Top-level structure must be a dictionary")
-
-    # -------- Convert --------
-
-    obj = cls.from_dict(data, default_section)
-
-    new_path = path.with_suffix(".rdm")
-    obj.save(new_path)
-
-    if overwrite:
-        path.unlink()
-
-    return obj
+        return obj
