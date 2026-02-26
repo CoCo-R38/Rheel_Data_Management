@@ -3,7 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import datetime, date, time
 from typing import Any, get_origin, get_args, Union
-import ast, types, copy
+import ast, types, copy, json, configparser
+try: import tomllib  # type: ignore
+except ModuleNotFoundError: tomllib = None
+try: import toml # type: ignore
+except ModuleNotFoundError: toml = None
+try: import yaml # type: ignore
+except ModuleNotFoundError: yaml = None
 
 
 # =========================================================
@@ -53,29 +59,29 @@ registry = TypeRegistry()
 registry.register(
     "datetime",
     datetime,
-    lambda v: f'"{v.isoformat()}"',
-    lambda v: datetime.fromisoformat(v.strip('"'))
+    lambda v: f'{v.isoformat()}',
+    lambda v: datetime.fromisoformat(v)
 )
 
 registry.register(
     "date",
     date,
-    lambda v: f'"{v.isoformat()}"',
-    lambda v: date.fromisoformat(v.strip('"'))
+    lambda v: f'{v.isoformat()}',
+    lambda v: date.fromisoformat(v)
 )
 
 registry.register(
     "time",
     time,
-    lambda v: f'"{v.isoformat()}"',
-    lambda v: time.fromisoformat(v.strip('"'))
+    lambda v: f'{v.isoformat()}',
+    lambda v: time.fromisoformat(v)
 )
 
 registry.register(
     "Path",
     Path,
-    lambda v: f'"{str(v)}"',
-    lambda v: Path(v.strip('"'))
+    lambda v: f'{str(v)}',
+    lambda v: Path(v)
 )
 
 
@@ -441,21 +447,127 @@ class Obj:
 
         return obj
 
-    @classmethod
-    def from_dict(cls, data: dict) -> Obj:
-        """
-        Create Obj from a nested dictionary.
+@classmethod
+def from_dict(cls, data: dict, default_section = "not sectioned") -> Obj:
+    """
+    Create Obj from a dictionary.
 
-        Format:
-            {
-                "section": {
-                    "key": (type, value)
-                }
-            }
-        """
-        obj = cls()
-        for section_name, items in data.items():
-            section = obj.section(section_name)
-            for key, (typ, value) in items.items():
-                section.set(key, typ, value)
-        return obj
+    Rules:
+        - Top-level dict values become sections
+        - Top-level non-dict values go into `default_section`
+        - Values may be:
+            (type, value) tuples
+            or plain values (type inferred)
+    """
+    obj = cls()
+
+    if not isinstance(data, dict):
+        raise TypeError("Input data must be a dictionary")
+
+    for key, value in data.items():
+
+        # -------- Case 1: Proper section --------
+        if isinstance(value, dict):
+            section = obj.section(key)
+
+            for subkey, entry in value.items():
+
+                # (type, value)
+                if (
+                    isinstance(entry, tuple)
+                    and len(entry) == 2
+                    and isinstance(entry[0], type)
+                ):
+                    typ, val = entry
+                else:
+                    typ = type(entry)
+                    val = entry
+
+                section.set(subkey, typ, val)
+
+        # -------- Case 2: Top-level value --------
+        else:
+            section = obj.section(default_section)
+
+            if (
+                isinstance(value, tuple)
+                and len(value) == 2
+                and isinstance(value[0], type)
+            ):
+                typ, val = value
+            else:
+                typ = type(value)
+                val = value
+
+            section.set(key, typ, val)
+
+    return obj
+
+@classmethod
+def convert_file(cls, filename: str | Path, default_section = "not sectioned", overwrite = False) -> Obj:
+    """
+    Convert JSON, TOML, YAML, or INI into .rdm format.
+
+    If overwrite=True, deletes original file after conversion.
+    """
+
+    path = Path(filename)
+
+    if not path.exists():
+        raise FileNotFoundError(path)
+
+    suffix = path.suffix.lower()
+
+    # -------- Load Data --------
+
+    if suffix == ".json":
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+    elif suffix == ".toml":
+        if tomllib:
+            with open(path, "rb") as f:
+                data = tomllib.load(f)
+        elif toml:
+            with open(path, "r", encoding="utf-8") as f:
+                data = toml.load(f)
+        else:
+            raise RuntimeError("TOML requires Python 3.11+ or 'toml' package.")
+
+    elif suffix in (".yaml", ".yml"):
+        if not yaml:
+            raise RuntimeError("YAML support requires PyYAML.")
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+
+    elif suffix == ".ini":
+        parser = configparser.ConfigParser()
+        parser.read(path)
+
+        data = {}
+
+        # Sections
+        for section in parser.sections():
+            data[section] = dict(parser[section])
+
+        # Handle DEFAULT section
+        if parser.defaults():
+            data["default"] = dict(parser.defaults())
+
+    else:
+        raise ValueError(f"Unsupported file type: {suffix}")
+
+    if not isinstance(data, dict):
+        raise TypeError("Top-level structure must be a dictionary")
+
+    # -------- Convert --------
+
+    obj = cls.from_dict(data, default_section)
+
+    new_path = path.with_suffix(".rdm")
+    obj.save(new_path)
+
+    if overwrite:
+        path.unlink()
+
+    return obj
