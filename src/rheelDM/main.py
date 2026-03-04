@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timezone, timedelta
 from typing import Any, get_origin, get_args, Union
 import ast, types, copy, json, configparser
 try: import tomllib  # type: ignore
@@ -27,8 +27,8 @@ class TypeRegistry:
         registry.register(
             "datetime",
             datetime,
-            lambda v: f'"{v.isoformat()}"',
-            lambda v: datetime.fromisoformat(v.strip('"'))
+            lambda v: f'{v.isoformat()}',
+            lambda v: datetime.fromisoformat(v)
         )
     """
 
@@ -105,10 +105,37 @@ SAFE_TYPES = {
     "Path": Path,
 }
 
-
 def parse_type(type_str: str):
     """Safely parse a type string like 'list[str | int]'."""
     return eval(type_str, SAFE_TYPES)
+
+
+# =========================================================
+# ExpiredKey Type
+# =========================================================
+
+class ExpiredKey:
+    """
+    Represents an expired temporary key.
+
+    Contains metadata about the key and its expiration time.
+    """
+
+    def __init__(self, key: str, expired_at: datetime):
+        self.key = key
+        self.expired_at = expired_at
+
+    def __repr__(self):
+        return (
+            f"<ExpiredKey key='{self.key}' "
+            f"expired_at='{self.expired_at.isoformat()}'>"
+        )
+
+    def __bool__(self):
+        """
+        ExpiredKey evaluates to False in boolean context.
+        """
+        return False
 
 
 # =========================================================
@@ -398,7 +425,7 @@ class Obj:
             lines.extend(section.serialize())
             lines.append("")
 
-        path.write_text("\n".join(lines).rstrip())
+        path.write_text("# Rheel Data Management 2.0\n\n" + "\n".join(lines).rstrip())
 
     @classmethod
     def load(cls, filename: str | Path, default: dict | Obj | bool | None = None) -> Obj | bool:
@@ -416,8 +443,10 @@ class Obj:
         if not path.exists():
             if isinstance(default, bool):
                 return copy.deepcopy(default)
-            if isinstance(default, Obj):
+            if isinstance(default, cls):
                 return copy.deepcopy(default)
+            if isinstance(default, TempObj):
+                raise TypeError("Default cannot be TempObj for Obj.load()")
             if isinstance(default, dict):
                 return cls.from_dict(default)
             return cls()
@@ -571,3 +600,349 @@ class Obj:
             path.unlink()
 
         return obj
+
+class TempObj(Obj):
+    """
+    Temporary Rheel Data (.rtd)
+
+    Sections represent expiration timestamps (UTC ISO format).
+    Keys are globally unique across all expiration sections.
+    Expired sections are automatically removed on save().
+    """
+
+    # =========================================================
+    # Internal Utilities
+    # =========================================================
+
+    @staticmethod
+    def _ensure_utc(dt: datetime) -> datetime:
+        if dt.tzinfo is None:
+            raise ValueError("Expiration datetime must be timezone-aware.")
+        return dt.astimezone(timezone.utc)
+
+    def _parse_section_time(self, section_name: str) -> datetime:
+        return datetime.fromisoformat(section_name)
+
+    def _remove_key_globally(self, key: str):
+        """Ensure keys are globally unique across expiration sections."""
+        for section in list(self._sections.values()):
+            if key in section._items:
+                section.delete(key)
+
+    def _cleanup_expired(self) -> bool:
+        """
+        Remove expired sections permanently.
+        Used only when saving.
+        """
+        now = datetime.now(timezone.utc)
+        removed = False
+
+        for name in list(self._sections.keys()):
+            expire_time = self._parse_section_time(name)
+
+            if expire_time <= now:
+                del self._sections[name]
+                removed = True
+
+        return removed
+
+    # =========================================================
+    # Public API
+    # =========================================================
+
+    def set(
+        self,
+        key: str,
+        typ: type,
+        value: Any,
+        *,
+        ttl: int | float | timedelta | None = None,
+        expires_at: datetime | None = None
+    ):
+        """
+        Set a temporary key.
+
+        Exactly one of `ttl` or `expires_at` must be provided.
+
+        - ttl: seconds or timedelta
+        - expires_at: timezone-aware datetime (UTC will be enforced)
+        """
+
+        if (ttl is None) == (expires_at is None):
+            raise ValueError("Provide exactly one of ttl or expires_at.")
+
+        if ttl is not None:
+            if isinstance(ttl, timedelta):
+                expire_time = datetime.now(timezone.utc) + ttl
+            else:
+                expire_time = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+        else:
+            expire_time = self._ensure_utc(expires_at)
+
+        expire_time = self._ensure_utc(expire_time)
+
+        # Enforce global uniqueness
+        self._remove_key_globally(key)
+
+        section_name = expire_time.isoformat()
+        section = self.section(section_name)
+        section.set(key, typ, value)
+
+    def get(self, key: str, default: Any = KeyError) -> Any | ExpiredKey:
+        """
+        Retrieve key across expiration sections.
+
+        Returns:
+            - Value if valid
+            - ExpiredKey if expired (and not cleaned up, else )
+            - default if not found
+        """
+        now = datetime.now(timezone.utc)
+
+        for section_name, section in self._sections.items():
+            if key in section._items:
+                expire_time = self._parse_section_time(section_name)
+
+                if expire_time <= now:
+                    return ExpiredKey(key, expire_time)
+
+                return section.get(key)
+        if default is KeyError: raise KeyError(f"\"{key}\" does not exist")
+        else:                   return default
+
+    def delete(self, key: str):
+        """
+        Delete a key globally from RTD.
+
+        Removes the key from its expiration section.
+        Removes the section if it becomes empty.
+        """
+        for section_name, section in list(self._sections.items()):
+            if key in section._items:
+                section.delete(key)
+
+                # Remove empty expiration section
+                if not section._items:
+                    del self._sections[section_name]
+
+                return
+        raise KeyError(f"\"{key}\" does not exist in RTD.")
+
+    def add(self, key: str, value: Any):
+        """
+        Add or subtract numeric or datetime values.
+
+        Delegates to underlying Section.add().
+        Raises ExpiredKey if expired.
+        """
+        now = datetime.now(timezone.utc)
+
+        for section_name, section in self._sections.items():
+            if key in section._items:
+                expire_time = self._parse_section_time(section_name)
+
+                if expire_time <= now:
+                    raise ExpiredKey(key, expire_time)
+
+                section.add(key, value)
+                return
+        raise KeyError(f"\"{key}\" does not exist in RTD.")
+
+    def multiply(self, key: str, factor: int | float):
+        """
+        Multiply numeric values.
+
+        Delegates to underlying Section.multiply().
+        Raises ExpiredKey if expired.
+        """
+        now = datetime.now(timezone.utc)
+
+        for section_name, section in self._sections.items():
+            if key in section._items:
+                expire_time = self._parse_section_time(section_name)
+
+                if expire_time <= now:
+                    raise ExpiredKey(key, expire_time)
+
+                section.multiply(key, factor)
+                return
+        raise KeyError(f"\"{key}\" does not exist in RTD.")
+
+    def extend(self, key: str, value: Any):
+        """
+        Dynamically extend value based on type.
+
+        Delegates to underlying Section.extend().
+        Raises ExpiredKey if expired.
+        """
+        now = datetime.now(timezone.utc)
+
+        for section_name, section in self._sections.items():
+            if key in section._items:
+                expire_time = self._parse_section_time(section_name)
+
+                if expire_time <= now:
+                    raise ExpiredKey(key, expire_time)
+
+                section.extend(key, value)
+                return
+        raise KeyError(f"\"{key}\" does not exist in RTD.")
+
+    def get_expiration(self, key: str) -> datetime | None:
+        now = datetime.now(timezone.utc)
+
+        for section_name, section in self._sections.items():
+            if key in section._items:
+                expire_time = self._parse_section_time(section_name)
+
+                if expire_time <= now:
+                    return None  # already expired
+
+                return expire_time
+
+        return None
+
+    def extend_expiration(
+        self,
+        key: str,
+        *,
+        seconds: int | float | None = None,
+        delta: timedelta | None = None,
+        new_expires_at: datetime | None = None
+    ):
+        """
+        Extend or change expiration of a key.
+
+        Provide exactly one of:
+            - seconds
+            - delta
+            - new_expires_at
+        """
+        if sum(x is not None for x in (seconds, delta, new_expires_at)) != 1:
+            raise ValueError("Provide exactly one extension method.")
+
+        # Find key
+        for section_name, section in list(self._sections.items()):
+            if key in section._items:
+                typ, value = section._items[key]
+
+                old_expire = self._parse_section_time(section_name)
+
+                if seconds is not None:
+                    new_expire = old_expire + timedelta(seconds=seconds)
+                elif delta is not None:
+                    new_expire = old_expire + delta
+                else:
+                    new_expire = self._ensure_utc(new_expires_at)
+
+                new_expire = self._ensure_utc(new_expire)
+
+                # Remove from old section
+                section.delete(key)
+
+                # Remove empty section
+                if not section._items:
+                    del self._sections[section_name]
+
+                # Reinsert with new expiration
+                new_section = self.section(new_expire.isoformat())
+                new_section.set(key, typ, value)
+
+                return
+
+        raise KeyError(f"{key} does not exist in RTD.")
+
+    def save(self, filename: str | Path):
+        """
+        Save RTD file sorted by expiration (soonest first).
+        Deletes expired sections permanently.
+        Deletes file if empty.
+        """
+        self._cleanup_expired()
+        path = Path(filename)
+        if path.suffix != ".rtd":
+            path = path.with_suffix(".rtd")
+
+        # Delete file if no sections
+        if not self._sections:
+            path.unlink(missing_ok=True)
+            return
+
+        sorted_sections = sorted(
+            self._sections.values(),
+            key=lambda sec: self._parse_section_time(sec.name)
+        )
+
+        lines = []
+        for section in sorted_sections:
+            lines.extend(section.serialize())
+            lines.append("")
+
+        path.write_text("# Rheel Temporary Data @ Rheel Data Management 2.0\n\n" + "\n".join(lines).rstrip())
+
+    @classmethod
+    def load(cls, filename: str | Path, default: TempObj | bool | None = None) -> TempObj:
+        """
+        Load RTD file.
+
+        Parameters:
+            default:
+                - TempObj → returned (deep copy) if file missing or empty
+                - True    → return empty TempObj
+                - False   → raise FileNotFoundError
+                - None    → return empty TempObj (default behavior)
+        """
+        path = Path(filename)
+        if path.suffix != ".rtd":
+            path = path.with_suffix(".rtd")
+
+        # ---------------------------------------------------------
+        # File does not exist
+        # ---------------------------------------------------------
+        if not path.exists():
+            if isinstance(default, bool):
+                return copy.deepcopy(default)
+            if isinstance(default, Obj):
+                raise TypeError("Default cannot be Obj for TempObj.load()")
+            if isinstance(default, cls):
+                return copy.deepcopy(default)
+            if isinstance(default, dict):
+                return cls.from_dict(default)
+            return cls()
+
+        # ---------------------------------------------------------
+        # Parse file
+        # ---------------------------------------------------------
+        content = path.read_text().splitlines()
+        temp = cls()
+
+        current_name = None
+        buffer = []
+
+        for raw_line in content:
+            stripped = raw_line.strip()
+
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            if stripped.startswith("[") and stripped.endswith("]"):
+                if current_name:
+                    temp._sections[current_name] = Section.from_lines(current_name, buffer)
+                    buffer = []
+                current_name = stripped[1:-1]
+            else:
+                buffer.append(raw_line)
+
+        if current_name:
+            temp._sections[current_name] = Section.from_lines(current_name, buffer)
+
+        # ---------------------------------------------------------
+        # Empty file after parsing
+        # ---------------------------------------------------------
+        if not temp._sections:
+            path.unlink(missing_ok=True)
+
+            if isinstance(default, cls):
+                return copy.deepcopy(default)
+            return cls()
+        return temp
