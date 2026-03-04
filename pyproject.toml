@@ -1,6 +1,6 @@
 [project]
 name = "Rheel-Data-Management"
-version = "1.7"
+version = "2.0"
 authors = [
   { name="CoCo_R", email="coco_snow@myyahoo.com" },
 ]
