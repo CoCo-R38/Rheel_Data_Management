@@ -299,36 +299,64 @@ class Section:
         origin = get_origin(typ)
         args = get_args(typ)
 
+        # ------------------------------------------------
+        # Union Types (str | int, Union[str, int])
+        # ------------------------------------------------
         if origin in (Union, types.UnionType):
             for option in args:
                 try:
                     self._validate(value, option)
                     return
                 except TypeError:
-                    continue
-            raise TypeError(f"{value} does not match any type in {typ}")
+                    pass
+            raise TypeError(f"{value!r} does not match any type in {typ}")
 
+        # ------------------------------------------------
+        # Non-generic types
+        # ------------------------------------------------
         if origin is None:
+            if typ is Any:
+                return
+
             if not isinstance(value, typ):
-                raise TypeError(f"{value} is not {typ}")
+                raise TypeError(f"{value!r} is not {typ}")
             return
 
+        # ------------------------------------------------
+        # list[T], set[T], tuple[T]
+        # ------------------------------------------------
         if origin in (list, set, tuple):
             if not isinstance(value, origin):
-                raise TypeError(f"Expected {origin.__name__}")
+                raise TypeError(f"Expected {origin.__name__}, got {type(value).__name__}")
+
+            if not args:
+                return
+
+            item_type = args[0]
+
             for v in value:
-                self._validate(v, args[0])
+                self._validate(v, item_type)
+
             return
 
+        # ------------------------------------------------
+        # dict[K, V]
+        # ------------------------------------------------
         if origin is dict:
             if not isinstance(value, dict):
-                raise TypeError("Expected dict")
+                raise TypeError(f"Expected dict, got {type(value).__name__}")
+
             key_t, val_t = args
+
             for k, v in value.items():
                 self._validate(k, key_t)
                 self._validate(v, val_t)
+
             return
 
+        # ------------------------------------------------
+        # Unsupported typing construct
+        # ------------------------------------------------
         raise TypeError(f"Unsupported type {typ}")
 
     # -----------------------
