@@ -1,9 +1,8 @@
 from __future__ import annotations
-
 from pathlib import Path
 from datetime import datetime, date, time, timezone, timedelta
-from typing import Any, get_origin, get_args, Union
-import ast, types, copy, json, configparser
+from typing import Any, get_origin, get_args, Union, Optional
+import ast, types, copy, json, configparser, importlib, inspect
 try: import tomllib  # type: ignore
 except ModuleNotFoundError: tomllib = None
 try: import toml # type: ignore
@@ -11,77 +10,139 @@ except ModuleNotFoundError: toml = None
 try: import yaml # type: ignore
 except ModuleNotFoundError: yaml = None
 
-
 # =========================================================
 # Type Registry
 # =========================================================
 
+DEFAULT_TYPES = {
+    "str": str,
+    "int": int,
+    "float": float,
+    "bool": bool,
+    "NoneType": type(None),
+    "Optional": Union[type(None), Any],
+
+    "list": list,
+    "set": set,
+    "tuple": tuple,
+    "dict": dict,
+
+    "datetime": datetime,
+    "date": date,
+    "time": time,
+
+    "Path": Path,
+}
+
+def import_from_path(path: str):
+    parts = path.split(".")
+
+    for i in range(len(parts), 0, -1):
+        module_path = ".".join(parts[:i])
+
+        try:
+            module = importlib.import_module(module_path)
+            obj = module
+
+            for part in parts[i:]:
+                obj = getattr(obj, part)
+
+            return obj
+
+        except ModuleNotFoundError:
+            continue
+
+    raise ImportError(f"Cannot import {path}")
+
 class TypeRegistry:
     """
-    Registry for custom types.
+    Simple in-memory type registry.
 
-    Allows registering custom serializer/deserializer pairs
-    for special Python types.
-
-    Example:
-        registry.register(
-            "datetime",
-            datetime,
-            lambda v: f'{v.isoformat()}',
-            lambda v: datetime.fromisoformat(v)
-        )
+    Supports custom serializer/deserializer pairs.
+    No persistence, no import issues, no circular dependencies.
     """
 
-    def __init__(self):
-        self._registry: dict[str, tuple[type, callable, callable]] = {}
+    _types: dict[str, type] = DEFAULT_TYPES.copy()
+    _registry: dict[str, tuple[type, callable, callable]] = {}
 
-    def register(self, name: str, typ: type, serializer, deserializer):
-        """Register a new custom type."""
-        self._registry[name] = (typ, serializer, deserializer)
+    # -----------------------------------------------------
 
-    def serialize(self, value: Any) -> str:
-        """Convert a Python value to its RDM string representation."""
-        for name, (typ, serializer, _) in self._registry.items():
+    @classmethod
+    def register(cls, name: str, typ: type, serializer, deserializer):
+        """
+        Register a custom type.
+
+        Example:
+            TypeRegistry.register(
+                "PartialEmoji",
+                discord.PartialEmoji,
+                lambda v: str(v),
+                discord.PartialEmoji.from_str
+            )
+        """
+        cls._types[name] = typ
+        cls._registry[name] = (typ, serializer, deserializer)
+
+    # -----------------------------------------------------
+
+    @classmethod
+    def clear_custom(cls):
+        """Reset registry to default types."""
+        cls._registry.clear()
+        cls._types = DEFAULT_TYPES.copy()
+
+    # -----------------------------------------------------
+
+    @classmethod
+    def serialize(cls, value):
+        """Convert Python object to RDM string."""
+
+        for typ, serializer, _ in cls._registry.values():
             if isinstance(value, typ):
                 return serializer(value)
+
         return repr(value)
 
-    def deserialize(self, value_str: str, typ: type):
-        """Convert RDM string representation back to Python object."""
-        for _, (registered_type, _, deserializer) in self._registry.items():
-            if typ is registered_type:
+    # -----------------------------------------------------
+
+    @classmethod
+    def deserialize(cls, value_str, typ):
+        """Convert RDM string back to Python object."""
+
+        for registered_type, _, deserializer in cls._registry.values():
+            origin = get_origin(typ) or typ
+            if isinstance(origin, type) and issubclass(origin, registered_type):
                 return deserializer(value_str)
+
         return ast.literal_eval(value_str)
 
 
-registry = TypeRegistry()
-
-registry.register(
+TypeRegistry.register(
     "datetime",
     datetime,
-    lambda v: f'{v.isoformat()}',
-    lambda v: datetime.fromisoformat(v)
+    lambda v: v.isoformat(),
+    datetime.fromisoformat
 )
 
-registry.register(
+TypeRegistry.register(
     "date",
     date,
-    lambda v: f'{v.isoformat()}',
-    lambda v: date.fromisoformat(v)
+    lambda v: v.isoformat(),
+    date.fromisoformat
 )
 
-registry.register(
+TypeRegistry.register(
     "time",
     time,
-    lambda v: f'{v.isoformat()}',
-    lambda v: time.fromisoformat(v)
+    lambda v: v.isoformat(),
+    time.fromisoformat
 )
 
-registry.register(
+TypeRegistry.register(
     "Path",
     Path,
-    lambda v: f'{str(v)}',
-    lambda v: Path(v)
+    str,
+    Path
 )
 
 
@@ -89,26 +150,57 @@ registry.register(
 # Safe Type Parsing
 # =========================================================
 
-SAFE_TYPES = {
-    "str": str,
-    "int": int,
-    "float": float,
-    "bool": bool,
-    "NoneType": type(None),
-    "list": list,
-    "set": set,
-    "tuple": tuple,
-    "dict": dict,
-    "datetime": datetime,
-    "date": date,
-    "time": time,
-    "Path": Path,
-}
+def _convert_optional(type_str: str) -> str:
+    """
+    Converts:
+        Optional[str]        → str | NoneType
+        Optional[list[int]]  → list[int] | NoneType
+        Optional[dict[str,int]] → dict[str,int] | NoneType
+    """
+
+    result = ""
+    i = 0
+
+    while i < len(type_str):
+        if type_str.startswith("Optional[", i):
+            i += len("Optional[")
+
+            bracket_level = 1
+            inner = ""
+
+            while i < len(type_str) and bracket_level > 0:
+                if type_str[i] == "[":
+                    bracket_level += 1
+                elif type_str[i] == "]":
+                    bracket_level -= 1
+
+                if bracket_level > 0:
+                    inner += type_str[i]
+
+                i += 1
+
+            # Recursively handle nested Optional
+            inner = _convert_optional(inner)
+
+            result += f"{inner} | NoneType"
+        else:
+            result += type_str[i]
+            i += 1
+
+    return result
 
 def parse_type(type_str: str):
-    """Safely parse a type string like 'list[str | int]'."""
-    return eval(type_str, SAFE_TYPES)
+    """
+    Safely parse type strings like:
+        list[str | int]
+        Optional[str]
+    """
 
+    # ---- Convert Optional[T] → T | NoneType ----
+    if "Optional[" in type_str:
+        type_str = _convert_optional(type_str)
+
+    return eval(type_str, TypeRegistry._types)
 
 # =========================================================
 # ExpiredKey Type
@@ -373,7 +465,7 @@ class Section:
             key_pad = key.ljust(max_key)
             type_name = self._type_name(typ)
             type_pad = type_name.ljust(max_type)
-            value_str = registry.serialize(value)
+            value_str = TypeRegistry.serialize(value)
 
             lines.append(f"{key_pad} : {type_pad} = {value_str}")
 
@@ -383,12 +475,31 @@ class Section:
         origin = get_origin(typ)
         args = get_args(typ)
 
+        # -------------------------
+        # Handle Union / Optional
+        # -------------------------
         if origin in (Union, types.UnionType):
+            args_set = set(args)
+
+            # Detect Optional[T] → Union[T, NoneType]
+            if type(None) in args_set and len(args) == 2:
+                non_none = [a for a in args if a is not type(None)][0]
+                return f"Optional[{self._type_name(non_none)}]"
+
+            # Fallback: normal union
             return " | ".join(self._type_name(a) for a in args)
 
+        # -------------------------
+        # Simple types
+        # -------------------------
         if origin is None:
-            return typ.__name__
+            if typ is type(None):
+                return "NoneType"
+            return TypeRegistry._types.get(typ.__name__, typ).__name__
 
+        # -------------------------
+        # Generics (list, dict, etc.)
+        # -------------------------
         inner = ", ".join(self._type_name(a) for a in args)
         return f"{origin.__name__}[{inner}]"
 
@@ -410,7 +521,7 @@ class Section:
             value_str = value_str.strip()
 
             typ = parse_type(type_str)
-            value = registry.deserialize(value_str, typ)
+            value = TypeRegistry.deserialize(value_str, typ)
 
             section._items[key] = (typ, value)
 
