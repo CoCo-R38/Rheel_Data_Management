@@ -32,7 +32,7 @@ than JSON or TOML --- without the complexity of a database.
 - Human-readable aligned format
 - Atomic file saves (corruption protection)
 - Custom type registry
-- Supports `datetime`, `date`, `time`, and `Path` natively
+- Supports `datetime`, `date`, `time`, `Path` and `Optional` natively
 - Safe variable handling with deep copy
 
 **NEW in v2:**
@@ -99,7 +99,7 @@ user = data.section("user123") # for simplicity user always refers to this secti
 
 user.set("name", str, "Steve")
 user.set("score", int, 42)
-user.set("tags", list[str], ["admin", "tester"])
+user.set("roles", list[str], ["admin", "tester"])
 user.set("prefs", dict[int, str], {1: "dark", 2: "light"})
 
 data.save("botdata.rdm")
@@ -181,8 +181,8 @@ user.set("items", list[int], [1]) # [1]
 user.extend("items", 2)           # [1, 2]
 user.extend("items", [3, 4])      # [1, 2, 3, 4]
 
-user.set("tags", set[str], {"a"}) # {"a"}
-user.extend("tags", "b")          # {"a", "b"}
+user.set("roles", set[str], {"a"}) # {"a"}
+user.extend("roles", "b")          # {"a", "b"}
 
 user.set("settings", dict[str,int], {"a":1}) # {"a": 1}
 user.extend("settings", {"b":2})             # {"a": 1, "b": 2}
@@ -218,6 +218,7 @@ user.delete("score") # key, value and type of "score" will be deleted entirely f
 -   `float`
 -   `bool`
 -   `None`
+-   `Optional[T]`
 -   `list[T]`
 -   `set[T]`
 -   `tuple[T]`
@@ -243,11 +244,23 @@ class Color:
     def __init__(self, hex_code: str):
         self.hex = hex_code
 
+#using lambda, where 'v' is the stored value
 rheelDM.TypeRegistry.register(
     "Color",
     Color,
-    lambda v: f'"{v.hex}"',
-    lambda v: Color(v.strip('"'))
+    lambda v: f'#{v.hex}',
+    lambda v: Color(v[1:])
+)
+
+#using callables (functions)
+def serialize_color(v): ...
+def deserialize_color(v): ...
+
+rheelDM.TypeRegistry.register(
+    "Color",
+    Color,
+    serialize_color,  # do not call them here,
+    deserialize_color # just pass the callable
 )
 ```
 
@@ -255,7 +268,7 @@ Now you can use it like any native type:
 
 ``` python
 # same with TempObj and set()
-data.section("settings").set("theme", Color, Color("#ff8800"))
+data.section("settings").set("theme", Color, Color("ff8800"))
 ```
 
 ------------------------------------------------------------------------
@@ -277,12 +290,14 @@ JSON cannot store:
 - Union types
 - Nested generics
 - `int` as `dict`-keys
-- `None` (stores it as `null`)
+- `NoneType` (stores it as `null`)
+- `Optional`
 
 TOML cannot store:
 - `Path`
 - `set`
-- `None`
+- `NoneType`
+- `Optional`
 - `int` as `dict`-keys
 
 RDM can store all of these, even the most complex and custom types.
