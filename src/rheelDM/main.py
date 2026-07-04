@@ -268,6 +268,7 @@ class Section:
     def __init__(self, name: str):
         self.name = name
         self._items: dict[str, tuple[type, Any]] = {}
+        self._aliases: dict[str, str] = {}
 
     def set(self, key: str, typ: type, value: Any, overwrite=True):
         """
@@ -275,16 +276,30 @@ class Section:
 
         `overwrite=False` will prevent overwriting existing keys, raising an error instead.
         """
-        if not overwrite and key in self._items:
-            raise KeyError(f"{key} already exists in section {self.name}")
+        keys = [k.strip() for k in key.split("|")]
+        main_key = keys[0]
+
+        if not overwrite:
+            for k in keys:
+                if k in self._aliases:
+                    raise KeyError(f"{k} already exists")
+
         if isinstance(value, (list, dict, set)):
             value = copy.deepcopy(value)
 
         self._validate(value, typ)
-        self._items[key] = (typ, value)
+        self._items[main_key] = (typ, value)
+
+        for k in keys:
+            self._aliases[k] = main_key
+
+        # ensure main key always exists
+        if main_key not in self._aliases:
+            self._aliases[main_key] = main_key
 
     def get(self, key: str, default: Any = KeyError) -> Any:
         """Retrieve a value by key. Returns a copy of default if key does not exist. Raises KeyError if key is missing and no default is provided."""
+        key = self._resolve_key(key)
         val = self._items.get(key, (None, copy.deepcopy(default)))[1]
         if val is KeyError:
             raise KeyError(f"\"{key}\" does not exist in section {self.name}")
@@ -293,8 +308,12 @@ class Section:
 
     def delete(self, key: str):
         """Remove a key from the section."""
-        if key in self._items:
-            del self._items[key]
+        key = self._resolve_key(key)
+        aliases_to_remove = [k for k, v in self._aliases.items() if v == key]
+        for k in aliases_to_remove:
+            del self._aliases[k]
+
+        del self._items[key]
 
     def add(self, key: str, value: Any):
         """
@@ -303,6 +322,7 @@ class Section:
         Works for int, float, or datetime (adds seconds as timedelta).
         Negative numbers perform subtraction.
         """
+        key = self._resolve_key(key)
         if key not in self._items:
             raise KeyError(f"{key} does not exist in section {self.name}")
         typ, current = self._items[key]
@@ -326,6 +346,7 @@ class Section:
         Raises:
             TypeError if the current value is not int or float.
         """
+        key = self._resolve_key(key)
         if key not in self._items:
             raise KeyError(f"{key} does not exist in section {self.name}")
         typ, value = self._items[key]
@@ -346,6 +367,7 @@ class Section:
             dict      -> merge dictionaries
             Path      -> join with string or Path
         """
+        key = self._resolve_key(key)
         if key not in self._items:
             raise KeyError(f"{key} does not exist in section {self.name}")
         typ, current = self._items[key]
@@ -454,15 +476,19 @@ class Section:
     # -----------------------
     # Serialization
     # -----------------------
+    def _alias_string(self, main_key):
+        return " | ".join(k for k, v in self._aliases.items() if v == main_key)
 
     def serialize(self) -> list[str]:
         lines = [f"[{self.name}]"]
 
-        max_key = max((len(k) for k in self._items), default=0)
+        max_key = max((len(self._alias_string(k)) for k in self._items), default=0)
         max_type = max((len(self._type_name(t)) for t, _ in self._items.values()), default=0)
 
-        for key, (typ, value) in self._items.items():
-            key_pad = key.ljust(max_key)
+        for main_key, (typ, value) in self._items.items():
+            aliases = [k for k, v in self._aliases.items() if v == main_key]
+            key_str = " | ".join(aliases)
+            key_pad = key_str.ljust(max_key)
             type_name = self._type_name(typ)
             type_pad = type_name.ljust(max_type)
             value_str = TypeRegistry.serialize(value)
@@ -503,6 +529,15 @@ class Section:
         inner = ", ".join(self._type_name(a) for a in args)
         return f"{origin.__name__}[{inner}]"
 
+    def _resolve_key(self, key: str) -> str:
+        """
+        Resolve alias → canonical key.
+        """
+        if key in self._aliases:
+            return self._aliases[key]
+
+        raise KeyError(f'"{key}" does not exist in section {self.name}')
+
     @classmethod
     def from_lines(cls, name: str, lines: list[str]):
         """Create Section from RDM file lines."""
@@ -516,14 +551,18 @@ class Section:
             left, value_str = line.split("=", 1)
             key_part, type_part = left.split(":", 1)
 
-            key = key_part.strip()
+            keys = [k.strip() for k in key_part.split("|")]
+            main_key = keys[0]
             type_str = type_part.strip()
             value_str = value_str.strip()
 
             typ = parse_type(type_str)
             value = TypeRegistry.deserialize(value_str, typ)
 
-            section._items[key] = (typ, value)
+            section._items[main_key] = (typ, value)
+
+            for alias in keys:
+                section._aliases[alias] = main_key
 
         return section
 
@@ -564,7 +603,7 @@ class Obj:
             lines.extend(section.serialize())
             lines.append("")
 
-        path.write_text("# Rheel Data Management 2.0\n\n" + "\n".join(lines).rstrip())
+        path.write_text("# Rheel Data Management 2.5\n\n" + "\n".join(lines).rstrip(), "utf-8")
 
     @classmethod
     def load(cls, filename: str | Path, default: dict | Obj | bool | None = None) -> Obj | bool:
@@ -590,7 +629,7 @@ class Obj:
                 return cls.from_dict(default)
             return cls()
 
-        content = path.read_text().splitlines()
+        content = path.read_text("utf-8").splitlines()
 
         obj = cls()
         current_name = None
@@ -694,7 +733,7 @@ class Obj:
 
         elif suffix == ".toml":
             if tomllib:
-                with open(path, "rb") as f:
+                with open(path, "rb", encoding="utf-8") as f:
                     data = tomllib.load(f)
             elif toml:
                 with open(path, "r", encoding="utf-8") as f:
@@ -1017,7 +1056,7 @@ class TempObj(Obj):
             lines.extend(section.serialize())
             lines.append("")
 
-        path.write_text("# Rheel Temporary Data @ Rheel Data Management 2.0\n\n" + "\n".join(lines).rstrip())
+        path.write_text("# Rheel Temporary Data @ Rheel Data Management 2.5\n\n" + "\n".join(lines).rstrip(), "utf-8")
 
     @classmethod
     def load(cls, filename: str | Path, default: TempObj | bool | None = None) -> TempObj:
@@ -1052,7 +1091,7 @@ class TempObj(Obj):
         # ---------------------------------------------------------
         # Parse file
         # ---------------------------------------------------------
-        content = path.read_text().splitlines()
+        content = path.read_text("utf-8").splitlines()
         temp = cls()
 
         current_name = None
