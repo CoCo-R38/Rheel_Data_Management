@@ -1,6 +1,6 @@
 [project]
 name = "Rheel-Data-Management"
-version = "2.3"
+version = "2.5"
 authors = [
   { name="CoCo_R", email="coco_snow@myyahoo.com" },
 ]
@@ -11,7 +11,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-license = "GPL-3.0-only"
+license = "GPL-3.0"
 license-files = ["LICENSE*"]
 
 [build-system]
