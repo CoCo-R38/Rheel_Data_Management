@@ -2,7 +2,9 @@
 
 ![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)
 ![License GNU LGPL v2.1](https://img.shields.io/badge/License-LGPL_v2.1-green.svg)
-THIS LICENSE TAKES AFFECT IN VERSION 3.0
+
+^THIS LICENSE TAKES AFFECT IN VERSION 3.0
+
 LICENSE FOR VERSION 2.5 AND LOWER IS THE GNU GPL v3.0
 
 Strictly-typed, human-readable data management for Python.
